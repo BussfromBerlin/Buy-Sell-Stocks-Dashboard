@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Stocks</title>
+<style>
+  :root {
+    --bg: #efeae2;
+    --ink: #1c1916;
+    --muted: #5f584e;
+    --card: #f7f4ee;
+    --line: #d8d0c4;
+    --buy: #1c6b45;
+    --sell: #9d342c;
+    --wait: #8a5a12;
+    --blue: #1f4e79;
+    --red: #8e2f2f;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font: 15px/1.45 "Segoe UI", "Helvetica Neue", sans-serif;
+  }
+  header, main { width: min(1180px, calc(100% - 32px)); margin: 0 auto; }
+  header { display: flex; justify-content: space-between; gap: 24px; align-items: end; padding: 28px 0 12px; }
+  .kicker { margin: 0; letter-spacing: 0.14em; text-transform: uppercase; font-size: 12px; color: var(--muted); }
+  h1 { margin: 2px 0 0; font: 600 42px/1 Georgia, "Iowan Old Style", serif; }
+  #status { margin: 0; color: var(--muted); text-align: right; }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 16px 16px 12px;
+    margin: 14px 0;
+  }
+  .card h2 { margin: 0; font: 600 22px/1.2 Georgia, serif; }
+  .sub { margin: 4px 0 10px; color: var(--muted); }
+  .metrics { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 8px; }
+  .metrics div { background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; min-width: 108px; }
+  .metrics span { display: block; color: var(--muted); font-size: 12px; }
+  .metrics strong { font-variant-numeric: tabular-nums; }
+  svg { width: 100%; height: auto; display: block; }
+  .missing-note { background: #fff8e8; border: 1px solid #e4d3a4; border-radius: 8px; padding: 8px 10px; margin: 0 0 10px; }
+  .alert-on { background: #f8e8e4; border: 1px solid #e2b2aa; border-radius: 8px; padding: 10px 12px; font-weight: 650; }
+  .alert-off { background: #eef5ef; border: 1px solid #c9ddcc; border-radius: 8px; padding: 10px 12px; }
+  .tabs { display: flex; gap: 8px; margin: 8px 0; }
+  .tabs button {
+    border: 1px solid var(--line);
+    background: #fff;
+    border-radius: 999px;
+    padding: 8px 14px;
+    font: inherit;
+    cursor: pointer;
+  }
+  .tabs button[aria-selected="true"] { background: var(--ink); color: #fff; border-color: var(--ink); }
+  .caption { color: var(--muted); font-size: 13px; }
+  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; font-size: 13.5px; }
+  th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-size: 12px; color: var(--muted); font-weight: 600; position: sticky; top: 0; background: var(--card); }
+  .nums { color: var(--muted); font-size: 12px; }
+  .BUY { color: var(--buy); font-weight: 700; }
+  .SELL { color: var(--sell); font-weight: 700; }
+  .WAIT { color: var(--wait); font-weight: 700; }
+  .empty { padding: 18px; color: var(--muted); }
+  .legend { display: flex; gap: 14px; color: var(--muted); font-size: 12px; margin-top: 6px; }
+  .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 4px; }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <p class="kicker">Champion model</p>
+    <h1>Stocks</h1>
+  </div>
+  <p id="status">Loading prices…</p>
+</header>
+<main id="app"></main>
+<script>
+const statusEl = document.getElementById("status");
+const app = document.getElementById("app");
+
+function text(value) {
+  if (value == null || value === "") return "—";
+  if (typeof value === "number") return value.toLocaleString(undefined, { maximumFractionDigits: 2 });
+  return String(value);
+}
+
+function el(tag, attrs, children) {
+  const node = document.createElement(tag);
+  Object.entries(attrs || {}).forEach(([key, value]) => {
+    if (key === "class") node.className = value;
+    else if (key === "html") node.innerHTML = value;
+    else node.setAttribute(key, value);
+  });
+  (children || []).forEach((child) => node.append(child));
+  return node;
+}
+
+function metric(label, value) {
+  const box = el("div");
+  box.append(el("span", {}, [label]), el("strong", {}, [text(value)]));
+  return box;
+}
+
+function parseDate(iso) { return Date.parse(iso + "T00:00:00Z"); }
+
+function extent(values) {
+  const finite = values.filter((value) => value != null && !Number.isNaN(value));
+  if (!finite.length) return [0, 1];
+  let lo = Math.min(...finite);
+  let hi = Math.max(...finite);
+  if (lo === hi) { lo -= 1; hi += 1; }
+  const pad = (hi - lo) * 0.08;
+  return [lo - pad, hi + pad];
+}
+
+function chartSvg(width, height) {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+  svg.setAttribute("role", "img");
+  return svg;
+}
+
+function add(svg, name, attrs) {
+  const node = document.createElementNS("http://www.w3.org/2000/svg", name);
+  Object.entries(attrs).forEach(([key, value]) => node.setAttribute(key, value));
+  svg.append(node);
+  return node;
+}
+
+function drawAxes(svg, width, height, pad, y0, y1, dates) {
+  add(svg, "line", { x1: pad.l, x2: width - pad.r, y1: height - pad.b, y2: height - pad.b, stroke: "#d8d0c4" });
+  [0, 0.5, 1].forEach((t) => {
+    const y = pad.t + (height - pad.t - pad.b) * t;
+    add(svg, "line", { x1: pad.l, x2: width - pad.r, y1: y, y2: y, stroke: "#eee8df" });
+    const value = y1 - (y1 - y0) * t;
+    add(svg, "text", { x: 8, y: y + 4, fill: "#5f584e", "font-size": 11 }).textContent = value.toFixed(1);
+  });
+  if (dates.length) {
+    [dates[0], dates[Math.floor(dates.length / 2)], dates[dates.length - 1]].forEach((iso, index) => {
+      const x = index === 0 ? pad.l : index === 2 ? width - pad.r : (pad.l + width - pad.r) / 2;
+      add(svg, "text", { x, y: height - 8, fill: "#5f584e", "font-size": 11, "text-anchor": index === 1 ? "middle" : index === 2 ? "end" : "start" }).textContent = iso;
+    });
+  }
+}
+
+function yScale(value, y0, y1, height, pad) {
+  return pad.t + (height - pad.t - pad.b) * (1 - (value - y0) / (y1 - y0));
+}
+
+function xScale(time, t0, t1, width, pad) {
+  if (t1 === t0) return (pad.l + width - pad.r) / 2;
+  return pad.l + (width - pad.l - pad.r) * (time - t0) / (t1 - t0);
+}
+
+function polyline(svg, points, color, width) {
+  if (points.length < 2) return;
+  add(svg, "polyline", {
+    points: points.map((point) => `${point[0]},${point[1]}`).join(" "),
+    fill: "none",
+    stroke: color,
+    "stroke-width": width || 1.6,
+  });
+}
+
+function watchChart(card, series) {
+  const width = 1100, height = 280, pad = { l: 48, r: 48, t: 16, b: 28 };
+  const svg = chartSvg(width, height);
+  if (!series.length) {
+    card.append(el("p", { class: "empty" }, ["No watchlist index yet."]));
+    return;
+  }
+  const rocY = extent(series.map((row) => row.roc));
+  const riskY = [0, 100];
+  const t0 = parseDate(series[0].date);
+  const t1 = parseDate(series[series.length - 1].date);
+  drawAxes(svg, width, height, pad, rocY[0], rocY[1], series.map((row) => row.date));
+  const roc = series.map((row) => [xScale(parseDate(row.date), t0, t1, width, pad), yScale(row.roc, rocY[0], rocY[1], height, pad)]);
+  polyline(svg, roc, "#1f4e79", 1.8);
+  for (let i = 1; i < series.length; i += 1) {
+    const color = riskColor(series[i].risk);
+    const x1 = xScale(parseDate(series[i - 1].date), t0, t1, width, pad);
+    const x2 = xScale(parseDate(series[i].date), t0, t1, width, pad);
+    add(svg, "line", {
+      x1, x2,
+      y1: yScale(series[i - 1].risk, riskY[0], riskY[1], height, pad),
+      y2: yScale(series[i].risk, riskY[0], riskY[1], height, pad),
+      stroke: color, "stroke-width": 1.6,
+    });
+  }
+  card.append(svg);
+  card.append(legend([["#1f4e79", "ROC index"], ["#8e2f2f", "Risk index, blue to red"]]));
+}
+
+function riskColor(value) {
+  const t = Math.max(0, Math.min(1, value / 100));
+  const r = Math.round(31 + (142 - 31) * t);
+  const g = Math.round(78 + (47 - 78) * t);
+  const b = Math.round(121 + (47 - 121) * t);
+  return `rgb(${r},${g},${b})`;
+}
+
+function dualChart(card, series, leftKey, rightKey, titleLeft, titleRight) {
+  const width = 1100, height = 280, pad = { l: 48, r: 48, t: 16, b: 28 };
+  const svg = chartSvg(width, height);
+  const left = series.filter((row) => row[leftKey] != null);
+  if (!left.length) {
+    card.append(el("p", { class: "empty" }, ["No series for this chart."]));
+    return;
+  }
+  const yLeft = extent(left.map((row) => row[leftKey]));
+  const right = series.filter((row) => row[rightKey] != null);
+  const yRight = right.length ? extent(right.map((row) => row[rightKey])) : [0, 100];
+  const t0 = parseDate(series[0].date);
+  const t1 = parseDate(series[series.length - 1].date);
+  drawAxes(svg, width, height, pad, yLeft[0], yLeft[1], series.map((row) => row.date));
+  polyline(svg, left.map((row) => [xScale(parseDate(row.date), t0, t1, width, pad), yScale(row[leftKey], yLeft[0], yLeft[1], height, pad)]), "#1f4e79", 1.8);
+  if (right.length) {
+    polyline(svg, right.map((row) => [xScale(parseDate(row.date), t0, t1, width, pad), yScale(row[rightKey], yRight[0], yRight[1], height, pad)]), "#6b4c7a", 1.4);
+  }
+  card.append(svg);
+  card.append(legend([["#1f4e79", titleLeft], ["#6b4c7a", titleRight]]));
+}
+
+function llssChart(card, llss) {
+  card.append(el("p", { class: "missing-note" }, [llss.message]));
+  const width = 1100, height = 340, pad = { l: 64, r: 24, t: 28, b: 36 };
+  const svg = chartSvg(width, height);
+  const series = llss.ndx || [];
+  const turns = llss.turns || [];
+  const prices = series.map((row) => row.close).concat(turns.map((turn) => turn.ndx));
+  const dates = series.map((row) => row.date).concat(turns.map((turn) => turn.date)).sort();
+  if (!dates.length) {
+    card.append(el("p", { class: "empty" }, ["No Nasdaq-100 prices and no turns."]));
+    return;
+  }
+  const y = extent(prices);
+  const t0 = parseDate(dates[0]);
+  const t1 = parseDate(dates[dates.length - 1]);
+  drawAxes(svg, width, height, pad, y[0], y[1], dates);
+  if (series.length > 1) {
+    polyline(svg, series.map((row) => [xScale(parseDate(row.date), t0, t1, width, pad), yScale(row.close, y[0], y[1], height, pad)]), "#1f4e79", 1.7);
+  } else if (!series.length) {
+    card.append(el("p", { class: "sub" }, [llss.priceError || "Nasdaq-100 prices are unavailable. The known turns are still marked."]));
+  }
+  turns.forEach((turn) => {
+    const x = xScale(parseDate(turn.date), t0, t1, width, pad);
+    const yy = yScale(turn.ndx, y[0], y[1], height, pad);
+    const color = turn.confirmed ? "#1c6b45" : "#9d342c";
+    add(svg, "circle", { cx: x, cy: yy, r: 5.5, fill: color, stroke: "#fff", "stroke-width": 1.5 });
+    let labelY = yy - 34;
+    let anchor = "start";
+    let labelX = x + 8;
+    if (!turn.confirmed && turn.kind === "bottom") labelY = yy + 32;
+    if (turn.confirmed) {
+      anchor = "end";
+      labelX = x - 8;
+      labelY = yy - 16;
+    }
+    labelY = Math.max(16, Math.min(height - 18, labelY));
+    add(svg, "text", { x: labelX, y: labelY, fill: color, "font-size": 12, "text-anchor": anchor }).textContent = turn.label;
+  });
+  card.append(svg);
+  card.append(legend([
+    ["#1f4e79", "Nasdaq-100 close"],
+    ["#9d342c", "Unconfirmed turn"],
+    ["#1c6b45", "Confirmed turn"],
+  ]));
+  card.append(el("p", { class: "caption" }, [
+    "Thresholds stay in the labels: a top is confirmed only above +1.5, a bottom only below −1.0. They are not price levels and not a one-standard-deviation band.",
+  ]));
+}
+
+function legend(items) {
+  const row = el("div", { class: "legend" });
+  items.forEach(([color, label]) => {
+    const span = el("span");
+    span.append(el("i", { class: "swatch", style: `background:${color}` }));
+    span.append(label);
+    row.append(span);
+  });
+  return row;
+}
+
+function render(data) {
+  app.replaceChildren();
+  statusEl.textContent = data.generatedAt || "";
+  if (data.errors && data.errors.length) {
+    app.append(el("p", { class: "missing-note" }, [`Some feeds failed (${data.errors.length}). Missing names stay in the book with a note.`]));
+  }
+
+  const watch = data.watchlistIndex;
+  const watchCard = el("section", { class: "card", id: "chart-watchlist" });
+  watchCard.append(el("h2", {}, [watch.title]));
+  watchCard.append(el("p", { class: "sub" }, [`Equal-weight daily ROC(10) of the Dash1 watchlist, NDX excluded. Chart from 2025-08-14. Universe ${watch.universe}.`]));
+  const metrics = el("div", { class: "metrics" });
+  metrics.append(
+    metric("Universe", watch.universe),
+    metric("Risk index", watch.riskIndex),
+    metric("ROC index", watch.rocIndex),
+    metric("Positive ROC", watch.positiveRoc == null ? "—" : `${watch.positiveRoc.toFixed(1)}%`),
+  );
+  watchCard.append(metrics);
+  if (watch.missing && watch.missing.length) {
+    watchCard.append(el("p", { class: "sub" }, [`No daily prices: ${watch.missing.join(", ")}`]));
+  }
+  watchChart(watchCard, watch.series || []);
+  app.append(watchCard);
+
+  const roc = data.ndxRoc;
+  const rocCard = el("section", { class: "card", id: "chart-ndx" });
+  rocCard.append(el("h2", {}, [roc.title || "NDX Rate of Change"]));
+  rocCard.append(el("p", { class: "sub" }, [roc.chartTitle || "NDX ROC(10)"]));
+  if (roc.error) rocCard.append(el("p", { class: "empty" }, [roc.error]));
+  else {
+    const row = el("div", { class: "metrics" });
+    row.append(metric("As of", roc.asOf), metric("Close", roc.close), metric("ROC(10)", roc.roc), metric("z", roc.z), metric("Zone", roc.zone));
+    rocCard.append(row);
+    dualChart(rocCard, roc.series || [], "roc", "mri", "NDX ROC(10)", "QQQ MRI");
+  }
+  app.append(rocCard);
+
+  const nash = data.nashMri;
+  const nashCard = el("section", { class: "card", id: "chart-nash" });
+  nashCard.append(el("h2", {}, ["Nash & MRI"]));
+  nashCard.append(el("p", { class: "sub" }, [`MRI history, last four trading years. Liquidity: ${nash.liquidity || "—"}.`]));
+  if (nash.latest) {
+    const row = el("div", { class: "metrics" });
+    row.append(
+      metric("Nash", nash.latest.nash),
+      metric("Nash zone", nash.latest.zone),
+      metric("State", nash.latest.state),
+      metric("MRI", nash.latest.mri),
+      metric("MRI zone", nash.latest.mriZone),
+      metric("Correction", nash.latest.correction ? "Yes" : "No"),
+    );
+    nashCard.append(row);
+  }
+  if (nash.error) nashCard.append(el("p", { class: "empty" }, [nash.error]));
+  dualChart(nashCard, nash.series || [], "mri", "mri", "MRI", "MRI");
+  app.append(nashCard);
+
+  const llss = data.llss;
+  const llssCard = el("section", { class: "card", id: "chart-llss" });
+  llssCard.append(el("h2", {}, ["LLSS turns on NDX"]));
+  llssChart(llssCard, llss);
+  app.append(llssCard);
+
+  const champion = data.champion || {};
+  const champ = el("section", { class: "card", id: "champion-card" });
+  champ.append(el("h2", {}, ["Champion"]));
+  champ.append(el("p", { class: "sub" }, [champion.rules || ""]));
+  if (champion.alert) {
+    champ.append(el("p", { class: "alert-on", id: "llss-alert" }, [champion.alert]));
+  } else {
+    champ.append(el("p", { class: "alert-off", id: "llss-alert" }, [
+      `No unconfirmed-turn alert. Latest completed turn: ${champion.latestTurn || "—"}.`,
+    ]));
+  }
+  champ.append(el("p", { class: "caption" }, [champion.alertRule || ""]));
+  app.append(champ);
+
+  const book = el("section", { class: "card", id: "book" });
+  book.append(el("h2", {}, ["Pulse book"]));
+  const tabs = el("div", { class: "tabs" });
+  const watchBtn = el("button", { id: "tab-watchlist", type: "button", "aria-selected": "true" }, [`Dash1 watchlist (${data.watchlistCount})`]);
+  const ndxBtn = el("button", { id: "tab-ndx100", type: "button", "aria-selected": "false" }, [`NDX 100 (${data.ndxCount})`]);
+  tabs.append(watchBtn, ndxBtn);
+  book.append(tabs);
+  book.append(el("p", { class: "caption" }, [
+    "Pulse is weekly 2/4/6 and daily 2/5/12. Entry, Max buy, and Exit signal use Champion and are not gated by LLSS.",
+  ]));
+  const tableHost = el("div", { id: "book-table" });
+  book.append(tableHost);
+  app.append(book);
+
+  function show(which) {
+    watchBtn.setAttribute("aria-selected", which === "watchlist" ? "true" : "false");
+    ndxBtn.setAttribute("aria-selected", which === "ndx100" ? "true" : "false");
+    renderTable(tableHost, data.tabs[which] || [], which === "ndx100" && !data.ndxCount);
+  }
+  watchBtn.addEventListener("click", () => show("watchlist"));
+  ndxBtn.addEventListener("click", () => show("ndx100"));
+  show("watchlist");
+}
+
+function renderTable(host, rows, ndxMissing) {
+  if (ndxMissing) {
+    host.replaceChildren(el("p", { class: "empty" }, ["NDX 100 list could not be loaded from Nasdaq."]));
+    return;
+  }
+  if (!rows.length) {
+    host.replaceChildren(el("p", { class: "empty" }, ["No rows."]));
+    return;
+  }
+  const table = el("table");
+  const head = el("tr");
+  ["Rank", "Ticker", "Price", "Pulse", "Entry", "Max buy", "Exit signal", "Weekly 2/4/6", "Daily 2/5/12", "Note"].forEach((name) => {
+    head.append(el("th", {}, [name]));
+  });
+  table.append(el("thead", {}, [head]));
+  const body = el("tbody");
+  rows.forEach((row) => {
+    const tr = el("tr");
+    tr.append(el("td", {}, [String(row.rank)]));
+    tr.append(el("td", {}, [row.ticker]));
+    tr.append(el("td", {}, [row.priceText]));
+    tr.append(el("td", { class: row.pulse || "" }, [row.pulse || "—"]));
+    tr.append(el("td", {}, [row.entry]));
+    tr.append(el("td", {}, [row.maxBuy]));
+    tr.append(el("td", {}, [row.exitSignal]));
+    const weekly = el("td");
+    weekly.append(el("div", { class: row.weeklyCall || "" }, [row.weeklyCall || "—"]));
+    weekly.append(el("div", { class: "nums" }, [row.weeklyNums || "—"]));
+    tr.append(weekly);
+    const daily = el("td");
+    daily.append(el("div", { class: row.dailyCall || "" }, [row.dailyCall || "—"]));
+    daily.append(el("div", { class: "nums" }, [row.dailyNums || "—"]));
+    tr.append(daily);
+    tr.append(el("td", {}, [row.note || "—"]));
+    body.append(tr);
+  });
+  table.append(body);
+  host.replaceChildren(table);
+}
+
+async function poll() {
+  const status = await fetch("/api/status").then((response) => response.json());
+  if (status.error && !status.ready) {
+    statusEl.textContent = status.error;
+    app.replaceChildren(el("p", { class: "empty" }, [status.error]));
+    return;
+  }
+  if (!status.ready) {
+    const pct = status.total ? ` ${status.done}/${status.total}` : "";
+    statusEl.textContent = `${status.phase}${pct} ${status.detail || ""}`.trim();
+    setTimeout(poll, 800);
+    return;
+  }
+  const data = await fetch("/api/dashboard").then((response) => response.json());
+  render(data);
+}
+
+poll().catch((error) => {
+  statusEl.textContent = "The dashboard could not be loaded.";
+  app.replaceChildren(el("p", { class: "empty" }, [String(error)]));
+});
+</script>
+</body>
+</html>
