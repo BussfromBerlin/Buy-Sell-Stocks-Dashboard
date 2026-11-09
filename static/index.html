@@ -69,8 +69,10 @@
   }
   .tabs button[aria-selected="true"] { background: var(--ink); color: #fff; border-color: var(--ink); }
   .caption { color: var(--muted); font-size: 13px; }
-  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; font-size: 13.5px; }
-  th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  .table-wrap { overflow-x: auto; }
+  table { width: max-content; min-width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; font-size: 13.5px; }
+  th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--line); vertical-align: top; white-space: nowrap; }
+  td.note { white-space: normal; min-width: 240px; }
   th { font-size: 12px; color: var(--muted); font-weight: 600; position: sticky; top: 0; background: var(--card); }
   .nums { color: var(--muted); font-size: 12px; }
   .BUY { color: var(--buy); font-weight: 700; }
@@ -380,14 +382,16 @@ function render(data) {
   app.append(champ);
 
   const book = el("section", { class: "card", id: "book" });
-  book.append(el("h2", {}, ["Pulse book"]));
+  book.append(el("h2", {}, ["Champion"]));
+  const counts = el("p", { id: "champion-counts", class: "sub" }, ["Buy and sell: Champion"]);
+  book.append(counts);
   const tabs = el("div", { class: "tabs" });
   const watchBtn = el("button", { id: "tab-watchlist", type: "button", "aria-selected": "true" }, [`Dash1 watchlist (${data.watchlistCount})`]);
   const ndxBtn = el("button", { id: "tab-ndx100", type: "button", "aria-selected": "false" }, [`NDX 100 (${data.ndxCount})`]);
   tabs.append(watchBtn, ndxBtn);
   book.append(tabs);
   book.append(el("p", { class: "caption" }, [
-    "Pulse is weekly 2/4/6 and daily 2/5/12. Entry, Max buy, and Exit signal use Champion and are not gated by LLSS.",
+    "Buy and sell are Champion: weekly TRIX 2/5/7 on price, daily TRIX 3/6/16 and ADX(14) on ln(H/L/C), score at least 3.0. Missing Tx is not a veto. LLSS is not a gate. Pulse is a column, not the trade. Entry and Exit signal are Champion prices.",
   ]));
   const tableHost = el("div", { id: "book-table" });
   book.append(tableHost);
@@ -396,7 +400,11 @@ function render(data) {
   function show(which) {
     watchBtn.setAttribute("aria-selected", which === "watchlist" ? "true" : "false");
     ndxBtn.setAttribute("aria-selected", which === "ndx100" ? "true" : "false");
-    renderTable(tableHost, data.tabs[which] || [], which === "ndx100" && !data.ndxCount);
+    const rows = data.tabs[which] || [];
+    const tally = { BUY: 0, WAIT: 0, SELL: 0 };
+    rows.forEach((row) => { if (tally[row.champion] != null) tally[row.champion] += 1; });
+    counts.textContent = `Buy and sell: Champion · BUY ${tally.BUY} · WAIT ${tally.WAIT} · SELL ${tally.SELL}`;
+    renderTable(tableHost, rows, which === "ndx100" && !data.ndxCount);
   }
   watchBtn.addEventListener("click", () => show("watchlist"));
   ndxBtn.addEventListener("click", () => show("ndx100"));
@@ -413,6 +421,7 @@ function renderTable(host, rows, ndxMissing) {
     return;
   }
   const table = el("table");
+  const wrap = el("div", { class: "table-wrap" });
   const head = el("tr");
   ["Rank", "Ticker", "Price", "Pulse", "Entry", "Max buy", "Exit signal", "Weekly 2/4/6", "Daily 2/5/12", "Note"].forEach((name) => {
     head.append(el("th", {}, [name]));
@@ -422,25 +431,29 @@ function renderTable(host, rows, ndxMissing) {
   rows.forEach((row) => {
     const tr = el("tr");
     tr.append(el("td", {}, [String(row.rank)]));
-    tr.append(el("td", {}, [row.ticker]));
+    const ticker = el("td");
+    ticker.append(el("div", {}, [row.ticker]));
+    ticker.append(el("div", { class: row.champion || "" }, [`Champion ${row.champion || "—"}`]));
+    tr.append(ticker);
     tr.append(el("td", {}, [row.priceText]));
-    tr.append(el("td", { class: row.pulse || "" }, [row.pulse || "—"]));
+    tr.append(el("td", {}, [row.pulse || "—"]));
     tr.append(el("td", {}, [row.entry]));
     tr.append(el("td", {}, [row.maxBuy]));
     tr.append(el("td", {}, [row.exitSignal]));
     const weekly = el("td");
-    weekly.append(el("div", { class: row.weeklyCall || "" }, [row.weeklyCall || "—"]));
+    weekly.append(el("div", {}, [row.weeklyCall || "—"]));
     weekly.append(el("div", { class: "nums" }, [row.weeklyNums || "—"]));
     tr.append(weekly);
     const daily = el("td");
-    daily.append(el("div", { class: row.dailyCall || "" }, [row.dailyCall || "—"]));
+    daily.append(el("div", {}, [row.dailyCall || "—"]));
     daily.append(el("div", { class: "nums" }, [row.dailyNums || "—"]));
     tr.append(daily);
-    tr.append(el("td", {}, [row.note || "—"]));
+    tr.append(el("td", { class: "note" }, [row.note || "—"]));
     body.append(tr);
   });
   table.append(body);
-  host.replaceChildren(table);
+  wrap.append(table);
+  host.replaceChildren(wrap);
 }
 
 function statusLine(status) {

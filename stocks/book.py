@@ -36,6 +36,78 @@ def _nums(values: list[float | None]) -> str:
     return " / ".join(_fmt(value) for value in values)
 
 
+OPEN_EXIT = "Still open — exit on weekly TRIX2 ≤ 0"
+
+
+def champion_note(signal: str | None, trix2, trix5, adx, lite) -> str:
+    """Explain the Champion call. Pulse softScore is not part of this decision."""
+    if signal is None:
+        return "Champion: not enough weekly history"
+    if signal == "SELL" or (trix2 is not None and trix2 <= 0):
+        return "Champion SELL — weekly TRIX2 ≤ 0. Not promoted."
+    parts: list[str] = []
+    score = 0.0
+    if trix2 is not None and trix5 is not None and trix2 > trix5:
+        parts.append("TRIX2 > TRIX5")
+        score += 1.5
+    else:
+        parts.append("TRIX2 > TRIX5 off")
+    if adx is not None and adx > 25:
+        parts.append(f"ADX {adx:.1f}")
+        score += 1.25
+    else:
+        parts.append("ADX off" if adx is None else f"ADX {adx:.1f} ≤ 25")
+    if lite == "BUY":
+        parts.append("daily lite BUY")
+        score += 0.75
+    else:
+        parts.append(f"daily lite {lite or '—'}")
+    parts.append("Tx off")
+    return f"Champion {signal} — {', '.join(parts)}, score {score:.2f}"
+
+
+def champion_prices(marks: list[dict]) -> dict:
+    """Entry and exit prices from the Champion path. A weekly TRIX2 ≤ 0 close keeps its price."""
+    in_position = False
+    entry: tuple[str, float] | None = None
+    exit_event: tuple[str, float] | None = None
+    exit_locked = False
+    last_signal: str | None = None
+    for mark in marks:
+        trix2 = mark["trix2"]
+        signal = mark["signal"]
+        point = (mark["date"], mark["price"])
+        last_signal = signal
+        if trix2 is not None and trix2 <= 0:
+            if in_position:
+                exit_event = point
+                exit_locked = True
+                in_position = False
+            elif not exit_locked:
+                exit_event = point
+        elif signal == "BUY" and not in_position:
+            entry = point
+            in_position = True
+            exit_event = None
+            exit_locked = False
+    if entry is None:
+        entry_text = "—"
+    else:
+        entry_text = f"{entry[0]} · ${_fmt(entry[1])}"
+    if in_position:
+        exit_text = OPEN_EXIT
+    elif exit_event is None:
+        exit_text = "—"
+    else:
+        exit_text = f"Exit {exit_event[0]} · ${_fmt(exit_event[1])} — weekly TRIX2 ≤ 0"
+    return {
+        "entry": entry_text,
+        "exitSignal": exit_text,
+        "inPosition": in_position,
+        "lastSignal": last_signal,
+    }
+
+
 def analyze(ticker: str, daily: list[Bar], weekly: list[Bar]) -> dict:
     """One book row plus the series the watchlist index needs."""
     if not daily:
@@ -79,11 +151,9 @@ def analyze(ticker: str, daily: list[Bar], weekly: list[Bar]) -> dict:
     }
     dates = [bar.date for bar in daily]
 
-    in_position = False
-    entry: tuple[str, float] | None = None
-    exit_text = "—"
-    last_signal: str | None = None
+    marks: list[dict] = []
     last_daily: int | None = None
+    last_detail = {"trix2": None, "trix5": None, "adx": None, "lite": None}
     for i in range(len(weekly)):
         start = weekly[i].date
         end = weekly[i + 1].date if i + 1 < len(weekly) else "9999-12-31"
@@ -95,6 +165,7 @@ def analyze(ticker: str, daily: list[Bar], weekly: list[Bar]) -> dict:
         if daily_index is None:
             adx_value = None
             lite = None
+            mark_date, mark_price = weekly[i].date, weekly[i].close
         else:
             adx_value = adx[daily_index]
             lite = lightweight_call(
@@ -102,29 +173,17 @@ def analyze(ticker: str, daily: list[Bar], weekly: list[Bar]) -> dict:
                 daily_champion[6][daily_index],
                 daily_champion[16][daily_index],
             )
+            mark_date, mark_price = daily[daily_index].date, daily[daily_index].close
         signal = scored_signal(trix2, trix5, adx_value, lite, tx_ok=False)
-        if trix2 is not None and trix2 <= 0:
-            in_position = False
-            entry = None
-            exit_text = "Exit — weekly TRIX2 ≤ 0"
-        elif signal == "BUY":
-            if not in_position:
-                if daily_index is None:
-                    entry = (weekly[i].date, weekly[i].close)
-                else:
-                    entry = (daily[daily_index].date, daily[daily_index].close)
-                in_position = True
-            exit_text = "Still open — exit on weekly TRIX2 ≤ 0"
-        elif in_position:
-            exit_text = "Still open — exit on weekly TRIX2 ≤ 0"
-        else:
-            exit_text = "—"
-        last_signal = signal
+        marks.append({"trix2": trix2, "signal": signal, "date": mark_date, "price": mark_price})
         last_daily = daily_index
+        last_detail = {"trix2": trix2, "trix5": trix5, "adx": adx_value, "lite": lite}
+    trade = champion_prices(marks)
+    last_signal = trade["lastSignal"]
 
     week = len(weekly) - 1
     if last_daily is None:
-        pulse, note = None, "No daily bar in the latest week"
+        pulse = None
         weekly_call = None
         daily_call = None
         risk = None
@@ -151,7 +210,7 @@ def analyze(ticker: str, daily: list[Bar], weekly: list[Bar]) -> dict:
         if weekly_trix[2][week] is not None and weekly_trix[5][week] is not None:
             spread = weekly_trix[2][week] - weekly_trix[5][week]
         soft = soft_score(adx[last_daily], spread)
-        pulse, note = _pulse(
+        pulse, _pulse_note = _pulse(
             weekly_call,
             daily_call_pulse,
             pulse_fast,
@@ -192,14 +251,15 @@ def analyze(ticker: str, daily: list[Bar], weekly: list[Bar]) -> dict:
         "price": price,
         "priceText": _fmt(price),
         "pulse": pulse,
-        "entry": "—" if not in_position or entry is None else f"{entry[0]} · ${_fmt(entry[1])}",
+        "champion": last_signal,
+        "entry": trade["entry"],
         "maxBuy": "—" if size is None else f"{size:.3f}×",
-        "exitSignal": exit_text,
+        "exitSignal": trade["exitSignal"],
         "weeklyCall": weekly_call,
         "weeklyNums": weekly_nums,
         "dailyCall": daily_call,
         "dailyNums": daily_nums,
-        "note": note,
+        "note": champion_note(last_signal, **last_detail),
         "soft": soft,
         "risk": risk,
         "latestRoc": latest_roc,
@@ -243,6 +303,7 @@ def _empty(ticker: str, note: str) -> dict:
         "price": None,
         "priceText": "—",
         "pulse": None,
+        "champion": None,
         "entry": "—",
         "maxBuy": "—",
         "exitSignal": "—",
@@ -260,15 +321,13 @@ def _empty(ticker: str, note: str) -> dict:
 
 
 def rank_rows(rows: list[dict]) -> list[dict]:
-    """Display order is Pulse call, then softScore. Not champion_buy_strength."""
+    """Order by the Champion call. Pulse softScore does not decide the book."""
     order = {"BUY": 0, "WAIT": 1, "SELL": 2}
 
     def key(row: dict):
-        soft = row.get("soft")
         return (
-            row.get("pulse") not in order,
-            order.get(row.get("pulse"), 9),
-            -(soft if isinstance(soft, (int, float)) else -1e18),
+            row.get("champion") not in order,
+            order.get(row.get("champion"), 9),
             row["ticker"],
         )
 

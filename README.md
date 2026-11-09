@@ -1,6 +1,6 @@
 # Stocks
 
-A stock dashboard on the Champion model, with the Pulse book and the Dash1 charts.
+A stock dashboard. Buy and sell are the Champion model. The ticker tabs still show the Pulse columns.
 
 ## Run
 
@@ -18,9 +18,11 @@ The first load fetches Yahoo prices (10-year daily and weekly), the Nasdaq-100 l
 
 Rank, Ticker, Price, Pulse, Entry, Max buy, Exit signal, Weekly 2/4/6, Daily 2/5/12, Note.
 
-These are the Pulse table headers from Dash1 `scripts/render_trix_html.py` (weekly 2/4/6, daily 2/5/12). Pulse is a BUY only when both stacks are BUY, CMF(20) ≥ 0, and softScore ≥ 18. Weekly TRIX2 ≤ 0 is the exit.
+These are the Pulse table headers from Dash1 `scripts/render_trix_html.py` (weekly 2/4/6, daily 2/5/12). The Pulse column is that research call. It does not decide the trade, and neither does softScore.
 
-Entry, Max buy, and Exit signal are Champion, not a Pulse size. Champion buys when weekly TRIX2 > TRIX5, ADX(14) > 25 on log prices, and the daily 3/6/16 lite call is BUY (score 3.5 of 4.0). Weekly TRIX2 ≤ 0 is SELL and is never promoted. Tx P(BUY) is not in the source, so that bit is off and a buy is sized at 0.714× from p = 0.5. LLSS does not change those rules.
+Buy and sell are Champion. Weekly TRIX (2, 5, 7) is on price. Daily TRIX (3, 6, 16) and ADX(14) are on ln(H/L/C). Weekly TRIX2 ≤ 0 is SELL and is never promoted. Otherwise the score is weekly TRIX2 > TRIX5 (1.50) + ADX > 25 (1.25) + daily lite BUY (0.75) + Tx (0.50). BUY at 3.0 or more. Tx is missing, so that bit is off and is not a veto: a buy needs the other three and is sized at 0.714× from p = 0.5. LLSS is not a gate.
+
+Entry keeps the Champion entry date and price. Exit signal shows the Champion exit date and price (`Exit 2026-11-02 · $170.25 — weekly TRIX2 ≤ 0`). A position that is still open says so.
 
 - Dash1 watchlist: the 45 names in Dash1 `watchlist.json` as of 2026-11-08 13:10 UTC, in that order. It is not labeled as a universe of 42.
 - NDX 100: https://api.nasdaq.com/api/quote/list-type/nasdaq100

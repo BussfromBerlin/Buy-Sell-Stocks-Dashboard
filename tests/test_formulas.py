@@ -1,6 +1,7 @@
 import unittest
 from datetime import date
 
+from stocks.book import champion_note, champion_prices, rank_rows
 from stocks.indicators import (
     champion_size,
     lightweight_call,
@@ -41,6 +42,46 @@ class FormulaTests(unittest.TestCase):
         risk = ticker_risk("BUY", "BUY", "BUY", 5, -3, 3, 20)
         self.assertEqual(risk, 0)
         self.assertAlmostEqual(log_ohlc(10, 11, 12)[0], __import__("math").log(12))
+
+    def test_entry_and_exit_keep_champion_prices(self):
+        opened = champion_prices([
+            {"trix2": 1.0, "signal": "BUY", "date": "2026-10-05", "price": 179.37},
+            {"trix2": 0.4, "signal": "WAIT", "date": "2026-10-12", "price": 181.0},
+        ])
+        self.assertEqual(opened["entry"], "2026-10-05 · $179.37")
+        self.assertEqual(opened["exitSignal"], "Still open — exit on weekly TRIX2 ≤ 0")
+
+        closed = champion_prices([
+            {"trix2": 1.0, "signal": "BUY", "date": "2026-10-05", "price": 179.37},
+            {"trix2": -0.2, "signal": "SELL", "date": "2026-11-02", "price": 170.25},
+            {"trix2": -0.4, "signal": "SELL", "date": "2026-11-09", "price": 168.0},
+        ])
+        self.assertEqual(closed["entry"], "2026-10-05 · $179.37")
+        self.assertEqual(closed["exitSignal"], "Exit 2026-11-02 · $170.25 — weekly TRIX2 ≤ 0")
+
+        flagged = champion_prices([
+            {"trix2": -0.2, "signal": "SELL", "date": "2026-11-02", "price": 84.39},
+            {"trix2": -0.5, "signal": "SELL", "date": "2026-11-09", "price": 80.10},
+        ])
+        self.assertEqual(flagged["entry"], "—")
+        self.assertIn("$80.10", flagged["exitSignal"])
+        self.assertNotEqual(flagged["exitSignal"], "Exit — weekly TRIX2 ≤ 0")
+
+    def test_rank_follows_champion_not_pulse(self):
+        ranked = rank_rows([
+            {"ticker": "AAA", "pulse": "BUY", "champion": "SELL", "soft": 40},
+            {"ticker": "BBB", "pulse": "SELL", "champion": "BUY", "soft": 1},
+        ])
+        self.assertEqual([row["ticker"] for row in ranked], ["BBB", "AAA"])
+        self.assertNotIn("soft", ranked[0])
+
+    def test_champion_note_does_not_use_pulse_soft_score(self):
+        note = champion_note("WAIT", 1.0, 2.0, 20.0, "WAIT")
+        self.assertTrue(note.startswith("Champion WAIT"))
+        self.assertNotIn("softScore", note)
+        self.assertIn("Tx off", note)
+        sell = champion_note("SELL", -0.2, 1.0, 40.0, "BUY")
+        self.assertIn("Not promoted", sell)
 
     def test_trix_turns_positive_on_a_rise(self):
         closes = [float(i) for i in range(1, 80)]
