@@ -28,7 +28,19 @@
   header { display: flex; justify-content: space-between; gap: 24px; align-items: end; padding: 28px 0 12px; }
   .kicker { margin: 0; letter-spacing: 0.14em; text-transform: uppercase; font-size: 12px; color: var(--muted); }
   h1 { margin: 2px 0 0; font: 600 42px/1 Georgia, "Iowan Old Style", serif; }
+  .actions { display: flex; align-items: center; gap: 12px; }
   #status { margin: 0; color: var(--muted); text-align: right; }
+  #refresh {
+    border: 1px solid var(--ink);
+    background: var(--ink);
+    color: #fff;
+    border-radius: 999px;
+    padding: 8px 16px;
+    font: inherit;
+    cursor: pointer;
+  }
+  #refresh[disabled] { opacity: 0.55; cursor: progress; }
+  #app[aria-busy="true"] { opacity: 0.45; pointer-events: none; }
   .card {
     background: var(--card);
     border: 1px solid var(--line);
@@ -75,11 +87,15 @@
     <p class="kicker">Champion model</p>
     <h1>Stocks</h1>
   </div>
-  <p id="status">Loading prices…</p>
+  <div class="actions">
+    <p id="status">Loading prices…</p>
+    <button id="refresh" type="button">Refresh</button>
+  </div>
 </header>
 <main id="app"></main>
 <script>
 const statusEl = document.getElementById("status");
+const refreshBtn = document.getElementById("refresh");
 const app = document.getElementById("app");
 
 function text(value) {
@@ -427,22 +443,44 @@ function renderTable(host, rows, ndxMissing) {
   host.replaceChildren(table);
 }
 
+function statusLine(status) {
+  const pct = status.total ? ` ${status.done}/${status.total}` : "";
+  return `${status.phase}${pct} ${status.detail || ""}`.trim();
+}
+
 async function poll() {
   const status = await fetch("/api/status").then((response) => response.json());
+  refreshBtn.disabled = !status.ready || status.busy;
+  app.setAttribute("aria-busy", status.busy ? "true" : "false");
   if (status.error && !status.ready) {
     statusEl.textContent = status.error;
     app.replaceChildren(el("p", { class: "empty" }, [status.error]));
     return;
   }
-  if (!status.ready) {
-    const pct = status.total ? ` ${status.done}/${status.total}` : "";
-    statusEl.textContent = `${status.phase}${pct} ${status.detail || ""}`.trim();
+  if (!status.ready || status.busy) {
+    statusEl.textContent = status.busy ? `Refreshing prices… ${statusLine(status)}` : statusLine(status);
+    refreshBtn.textContent = status.busy ? "Refreshing…" : "Refresh";
     setTimeout(poll, 800);
     return;
   }
+  refreshBtn.textContent = "Refresh";
   const data = await fetch("/api/dashboard").then((response) => response.json());
   render(data);
 }
+
+refreshBtn.addEventListener("click", async () => {
+  refreshBtn.disabled = true;
+  refreshBtn.textContent = "Refreshing…";
+  statusEl.textContent = "Refreshing prices…";
+  const response = await fetch("/api/refresh", { method: "POST" });
+  if (!response.ok && response.status !== 202) {
+    statusEl.textContent = "Refresh failed.";
+    refreshBtn.disabled = false;
+    refreshBtn.textContent = "Refresh";
+    return;
+  }
+  poll();
+});
 
 poll().catch((error) => {
   statusEl.textContent = "The dashboard could not be loaded.";

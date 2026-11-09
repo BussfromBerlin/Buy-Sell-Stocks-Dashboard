@@ -1,4 +1,4 @@
-"""Local Stocks server. Prices are fetched when the process starts."""
+"""Stocks server. Listens on every interface. Prices load at startup and on Refresh."""
 
 from __future__ import annotations
 
@@ -11,14 +11,16 @@ from stocks.dashboard import build
 
 ROOT = Path(__file__).resolve().parent.parent
 PAGE = ROOT / "static" / "index.html"
-HOST = "127.0.0.1"
+HOST = "0.0.0.0"
 PORT = 8765
+PAGES = ("/", "/index.html", "/stocks", "/stocks/")
 
 
 class State:
     def __init__(self) -> None:
         self.lock = threading.Lock()
         self.ready = False
+        self.busy = False
         self.error: str | None = None
         self.phase = "starting"
         self.done = 0
@@ -37,6 +39,7 @@ class State:
         with self.lock:
             return {
                 "ready": self.ready,
+                "busy": self.busy,
                 "error": self.error,
                 "phase": self.phase,
                 "done": self.done,
@@ -48,17 +51,29 @@ class State:
 STATE = State()
 
 
-def _build() -> None:
+def _build(refresh: bool = False, claimed: bool = False) -> None:
+    with STATE.lock:
+        if STATE.busy and not claimed:
+            return
+        STATE.busy = True
+        STATE.error = None
+        STATE.phase = "prices"
+        STATE.done = 0
+        STATE.total = 0
+        STATE.detail = "refresh" if refresh else ""
     try:
-        payload = build(STATE.set_progress)
+        payload = build(STATE.set_progress, refresh=refresh)
         with STATE.lock:
             STATE.payload = payload
             STATE.ready = True
+            STATE.busy = False
             STATE.phase = "ready"
     except Exception as exc:
         with STATE.lock:
+            STATE.busy = False
             STATE.error = str(exc)
             STATE.phase = "error"
+            STATE.ready = STATE.payload is not None
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -73,9 +88,26 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def do_POST(self) -> None:
+        path = self.path.split("?", 1)[0]
+        if path != "/api/refresh":
+            self._send(404, b"Not found", "text/plain; charset=utf-8")
+            return
+        with STATE.lock:
+            if STATE.busy:
+                self._send(202, json.dumps(STATE.status()).encode(), "application/json")
+                return
+            STATE.busy = True
+            STATE.phase = "prices"
+            STATE.done = 0
+            STATE.total = 0
+            STATE.detail = "refresh"
+        threading.Thread(target=_build, kwargs={"refresh": True, "claimed": True}, daemon=True).start()
+        self._send(202, json.dumps(STATE.status()).encode(), "application/json")
+
     def do_GET(self) -> None:
         path = self.path.split("?", 1)[0]
-        if path in ("/", "/index.html"):
+        if path in PAGES:
             self._send(200, PAGE.read_bytes(), "text/html; charset=utf-8")
             return
         if path == "/api/status":
@@ -104,5 +136,5 @@ class Handler(BaseHTTPRequestHandler):
 def main() -> None:
     threading.Thread(target=_build, daemon=True).start()
     server = ThreadingHTTPServer((HOST, PORT), Handler)
-    print(f"Stocks http://{HOST}:{PORT}", flush=True)
+    print(f"Stocks http://{HOST}:{PORT}/stocks", flush=True)
     server.serve_forever()

@@ -75,13 +75,14 @@ def _write_cache(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload))
 
 
-def fetch_yahoo(symbol: str, interval: str) -> tuple[list[Bar], str | None]:
-    """Return bars and an error string. Cached for the UTC day."""
+def fetch_yahoo(symbol: str, interval: str, refresh: bool = False) -> tuple[list[Bar], str | None]:
+    """Return bars and an error string. Cached for the UTC day unless refresh is set."""
     key = f"yahoo_{symbol}_{interval}"
     path = _cache_path(key)
-    cached = _read_fresh(path)
-    if cached is not None:
-        return _bars(cached.get("bars") or []), None
+    if not refresh:
+        cached = _read_fresh(path)
+        if cached is not None:
+            return _bars(cached.get("bars") or []), None
     quoted = urllib.parse.quote(symbol, safe=".")
     url = (
         "https://query1.finance.yahoo.com/v8/finance/chart/"
@@ -130,11 +131,12 @@ def _bars(rows: list[dict]) -> list[Bar]:
     ]
 
 
-def fetch_fred(series_id: str) -> tuple[dict[str, float], str | None]:
+def fetch_fred(series_id: str, refresh: bool = False) -> tuple[dict[str, float], str | None]:
     path = _cache_path(f"fred_{series_id}")
-    cached = _read_fresh(path)
-    if cached is not None:
-        return {row["date"]: row["value"] for row in cached["rows"]}, None
+    if not refresh:
+        cached = _read_fresh(path)
+        if cached is not None:
+            return {row["date"]: row["value"] for row in cached["rows"]}, None
     url = f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}"
     try:
         text = _fetch(url, attempts=2, timeout=12).decode("utf-8", errors="replace")
@@ -159,11 +161,12 @@ def fetch_fred(series_id: str) -> tuple[dict[str, float], str | None]:
     return {row["date"]: row["value"] for row in rows}, None
 
 
-def fetch_nasdaq100() -> tuple[list[str], str | None, str | None]:
+def fetch_nasdaq100(refresh: bool = False) -> tuple[list[str], str | None, str | None]:
     path = _cache_path("nasdaq100")
-    cached = _read_fresh(path)
-    if cached is not None:
-        return cached["symbols"], cached.get("asOf"), None
+    if not refresh:
+        cached = _read_fresh(path)
+        if cached is not None:
+            return cached["symbols"], cached.get("asOf"), None
     url = "https://api.nasdaq.com/api/quote/list-type/nasdaq100"
     try:
         payload = json.loads(_fetch(url))

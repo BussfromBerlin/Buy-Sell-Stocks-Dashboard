@@ -8,9 +8,11 @@ A stock dashboard on the Champion model, with the Pulse book and the Dash1 chart
 python3 -m stocks
 ```
 
-Open http://127.0.0.1:8765
+Open http://127.0.0.1:8765/stocks. The same page is also at `/`. The server listens on `0.0.0.0:8765`.
 
-The first load fetches Yahoo prices (10-year daily and weekly), the Nasdaq-100 list, and FRED liquidity. No API key. Results are cached under `data/cache/` for the rest of that UTC day. If FRED fails, MRI liquidity uses the HYG/IEF close ratio. Names with no prices stay in the book with a note.
+**Refresh** refetches Yahoo, Nasdaq, and FRED, then recomputes every card. It is not a browser reload of the last payload.
+
+The first load fetches Yahoo prices (10-year daily and weekly), the Nasdaq-100 list, and FRED liquidity. No API key. Results are cached under `data/cache/` for the rest of that UTC day. Refresh ignores that cache, fetches again, and recomputes the cards. If FRED fails, MRI liquidity uses the HYG/IEF close ratio. Names with no prices stay in the book with a note.
 
 ## Pulse columns
 

@@ -26,12 +26,12 @@ LLSS_CHART_START = "2023-07-01"
 FRED_IDS = ("WALCL", "WTREGEN", "RRPONTSYD")
 
 
-def build(progress=None) -> dict:
+def build(progress=None, refresh: bool = False) -> dict:
     def report(phase: str, done: int, total: int, detail: str = "") -> None:
         if progress:
             progress(phase, done, total, detail)
 
-    symbols, nasdaq_asof, nasdaq_error = fetch_nasdaq100()
+    symbols, nasdaq_asof, nasdaq_error = fetch_nasdaq100(refresh=refresh)
     report("list", 1, 1, nasdaq_asof or nasdaq_error or "")
     errors = [nasdaq_error] if nasdaq_error else []
     book_names = list(dict.fromkeys([*WATCHLIST, *symbols]))
@@ -54,7 +54,9 @@ def build(progress=None) -> dict:
     frames: dict[tuple[str, str], list] = {}
     done = 0
     with ThreadPoolExecutor(max_workers=6) as pool:
-        futures = {pool.submit(fetch_yahoo, symbol, interval): (symbol, interval) for symbol, interval in jobs}
+        futures = {
+            pool.submit(fetch_yahoo, symbol, interval, refresh): (symbol, interval) for symbol, interval in jobs
+        }
         for future in as_completed(futures):
             symbol, interval = futures[future]
             bars, error = future.result()
@@ -68,7 +70,7 @@ def build(progress=None) -> dict:
     fred_failed = False
     for index, series_id in enumerate(FRED_IDS, start=1):
         report("liquidity", index, len(FRED_IDS), series_id)
-        observations, error = fetch_fred(series_id)
+        observations, error = fetch_fred(series_id, refresh=refresh)
         if error or not observations:
             fred_failed = True
             if error:
@@ -91,7 +93,8 @@ def build(progress=None) -> dict:
     mri_rows, liquidity = compute_mri_rows(frames, None if fred_failed else fred)
     llss = _llss(frames.get(("^NDX", "1d"), []))
     payload = {
-        "generatedAt": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+        "generatedAt": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
+        "refreshed": refresh,
         "errors": errors,
         "watchlistIndex": _watchlist_index(watch_rows),
         "ndxRoc": _ndx_roc(frames.get(("^NDX", "1d"), []), (mri_rows, liquidity)),
